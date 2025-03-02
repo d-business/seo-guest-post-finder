@@ -1,0 +1,3 @@
+web: gunicorn app:app
+
+echo "gunicorn==20.1.0" >> backend/requirements.txt

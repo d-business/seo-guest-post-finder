@@ -22,3 +22,9 @@ class Config:
     
     # Domain Authority ranges
     DA_RANGES = [(0, 20), (21, 40), (41, 60), (61, 80)]
+
+# Update the database configuration in config.py
+SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///seo_app.db'
+# Handle Heroku's postgres:// vs postgresql:// issue
+if SQLALCHEMY_DATABASE_URI and SQLALCHEMY_DATABASE_URI.startswith("postgres://"):
+    SQLALCHEMY_DATABASE_URI = SQLALCHEMY_DATABASE_URI.replace("postgres://", "postgresql://", 1)
