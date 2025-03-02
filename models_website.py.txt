@@ -1,0 +1,76 @@
+from datetime import datetime
+from enum import Enum
+from flask_sqlalchemy import SQLAlchemy
+
+db = SQLAlchemy()
+
+class OutreachStatus(Enum):
+    NOT_CONTACTED = 'not_contacted'
+    CONTACTED = 'contacted'
+    PENDING = 'pending'
+    APPROVED = 'approved'
+    REJECTED = 'rejected'
+
+class ContactType(Enum):
+    EMAIL = 'email'
+    FORM = 'form'
+    NONE = 'none'
+
+class Website(db.Model):
+    __tablename__ = 'websites'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    url = db.Column(db.String(255), unique=True, nullable=False)
+    domain = db.Column(db.String(255), nullable=False)
+    niche = db.Column(db.String(100), nullable=False)
+    
+    # Domain metrics
+    domain_authority = db.Column(db.Float)
+    organic_traffic = db.Column(db.Integer)
+    backlink_count = db.Column(db.Integer)
+    
+    # Contact information
+    contact_email = db.Column(db.String(255))
+    contact_form_url = db.Column(db.String(255))
+    contact_type = db.Column(db.Enum(ContactType), default=ContactType.NONE)
+    
+    # Guest post information
+    guest_post_guidelines_url = db.Column(db.String(255))
+    accepts_guest_posts = db.Column(db.Boolean, default=False)
+    
+    # Outreach tracking
+    outreach_status = db.Column(db.Enum(OutreachStatus), default=OutreachStatus.NOT_CONTACTED)
+    last_contacted_date = db.Column(db.DateTime)
+    outreach_notes = db.Column(db.Text)
+    
+    # Keywords
+    relevant_keywords = db.Column(db.Text)  # Comma-separated list or JSON
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f'<Website {self.domain}>'
+    
+    def to_dict(self):
+        """Convert website object to dictionary for API responses"""
+        return {
+            'id': self.id,
+            'url': self.url,
+            'domain': self.domain,
+            'niche': self.niche,
+            'domain_authority': self.domain_authority,
+            'organic_traffic': self.organic_traffic,
+            'backlink_count': self.backlink_count,
+            'contact_email': self.contact_email,
+            'contact_form_url': self.contact_form_url,
+            'contact_type': self.contact_type.value if self.contact_type else None,
+            'guest_post_guidelines_url': self.guest_post_guidelines_url,
+            'accepts_guest_posts': self.accepts_guest_posts,
+            'outreach_status': self.outreach_status.value if self.outreach_status else None,
+            'last_contacted_date': self.last_contacted_date.isoformat() if self.last_contacted_date else None,
+            'relevant_keywords': self.relevant_keywords,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat()
+        }

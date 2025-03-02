@@ -1,0 +1,24 @@
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+class Config:
+    # Flask configuration
+    SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-key-for-development'
+    
+    # Database configuration
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///seo_app.db'
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    
+    # SEMrush API configuration
+    SEMRUSH_API_KEY = os.environ.get('SEMRUSH_API_KEY')
+    SEMRUSH_API_URL = 'https://api.semrush.com'
+    
+    # Web scraping configuration
+    USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    REQUEST_TIMEOUT = 10  # seconds
+    
+    # Domain Authority ranges
+    DA_RANGES = [(0, 20), (21, 40), (41, 60), (61, 80)]

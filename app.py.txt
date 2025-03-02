@@ -1,0 +1,234 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import logging
+import os
+import json
+from typing import List, Dict, Any
+
+from config import Config
+from models.website import db, Website, OutreachStatus, ContactType
+from services.semrush_service import SEMrushService
+from services.scraper_service import ScraperService
+from services.database_service import DatabaseService
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize Flask app
+app = Flask(__name__)
+app.config.from_object(Config)
+
+# Enable CORS
+CORS(app)
+
+# Initialize database
+db.init_app(app)
+
+# Initialize services
+semrush_service = SEMrushService()
+scraper_service = ScraperService()
+db_service = DatabaseService()
+
+# Create database tables
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/niche', methods=['POST'])
+def process_niche():
+    """Process a niche to find relevant websites"""
+    data = request.json
+    
+    if not data or 'niche' not in data:
+        return jsonify({'error': 'Niche is required'}), 400
+    
+    niche = data['niche']
+    min_da = data.get('min_da')
+    max_da = data.get('max_da', 80)
+    keywords = data.get('keywords', [])
+    competitor_domains = data.get('competitor_domains', [])
+    
+    logger.info(f"Processing niche: {niche} with DA range {min_da}-{max_da}")
+    
+    # Step 1: Get keyword data if keywords are provided
+    all_keywords = []
+    if keywords:
+        for keyword in keywords:
+            keyword_data = semrush_service.get_keyword_magic_data(keyword)
+            all_keywords.extend(keyword_data)
+    
+    # Step 2: Process competitor domains to find relevant websites
+    relevant_domains = set()
+    for domain in competitor_domains:
+        # Get backlinks for the competitor domain
+        backlinks = semrush_service.get_backlinks(domain)
+        for backlink in backlinks:
+            if backlink['domain_score'] <= max_da and (min_da is None or backlink['domain_score'] >= min_da):
+                relevant_domains.add(backlink['source_domain'])
+        
+        # Get keywords for the competitor domain
+        keywords = semrush_service.get_keywords_overview(domain)
+        all_keywords.extend(keywords)
+    
+    # Step 3: Process each domain to extract data
+    results = []
+    processed_domains = set()
+    
+    # Process domains from backlinks
+    for domain in relevant_domains:
+        if domain in processed_domains:
+            continue
+        
+        processed_domains.add(domain)
+        
+        # Get domain info from SEMrush
+        domain_info = semrush_service.get_domain_overview(domain)
+        
+        if not domain_info:
+            continue
+        
+        # Skip domains with DA outside our range
+        authority_score = domain_info.get('authority_score', 0)
+        if authority_score > max_da or (min_da is not None and authority_score < min_da):
+            continue
+        
+        # Construct URL for scraping
+        url = f"https://{domain}" if not domain.startswith(('http://', 'https://')) else domain
+        
+        # Scrape website for contact info and guest post opportunities
+        website_info = scraper_service.get_website_info(url)
+        
+        # Combine data
+        website_data = {
+            'url': website_info['url'],
+            'domain': website_info['domain'],
+            'niche': niche,
+            'domain_authority': authority_score,
+            'organic_traffic': domain_info.get('organic_traffic', 0),
+            'backlink_count': domain_info.get('backlink_count', 0),
+            'contact_email': website_info['contact_email'],
+            'contact_form_url': website_info['contact_form_url'],
+            'contact_type': website_info['contact_type'].value,
+            'guest_post_guidelines_url': website_info['guest_post_guidelines_url'],
+            'accepts_guest_posts': website_info['accepts_guest_posts'],
+            'outreach_status': OutreachStatus.NOT_CONTACTED.value,
+            'relevant_keywords': json.dumps([k['keyword'] for k in all_keywords[:10]])  # Store top 10 keywords
+        }
+        
+        # Save to database
+        website = db_service.save_website(website_data)
+        results.append(website.to_dict())
+    
+    return jsonify({
+        'niche': niche,
+        'websites_found': len(results),
+        'results': results
+    })
+
+@app.route('/api/websites', methods=['GET'])
+def get_websites():
+    """Get websites with optional filters"""
+    niche = request.args.get('niche')
+    min_da = request.args.get('min_da')
+    max_da = request.args.get('max_da')
+    outreach_status = request.args.get('outreach_status')
+    
+    # Convert string values to appropriate types
+    if min_da:
+        min_da = float(min_da)
+    if max_da:
+        max_da = float(max_da)
+    
+    # Get websites based on filters
+    if niche and outreach_status:
+        websites = db_service.get_websites_by_outreach_status(
+            OutreachStatus(outreach_status), niche=niche
+        )
+    elif niche:
+        websites = db_service.get_websites_by_niche(niche, min_da=min_da, max_da=max_da)
+    elif outreach_status:
+        websites = db_service.get_websites_by_outreach_status(OutreachStatus(outreach_status))
+    else:
+        # Get all websites if no filters
+        websites = Website.query.order_by(Website.domain_authority.desc()).all()
+    
+    return jsonify([website.to_dict() for website in websites])
+
+@app.route('/api/websites/<int:website_id>', methods=['PUT'])
+def update_website(website_id):
+    """Update website information"""
+    data = request.json
+    
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    website = Website.query.get(website_id)
+    
+    if not website:
+        return jsonify({'error': f'Website with ID {website_id} not found'}), 404
+    
+    # Update fields
+    for key, value in data.items():
+        if hasattr(website, key) and key != 'id':
+            # Special handling for enum types
+            if key == 'outreach_status' and value:
+                website.outreach_status = OutreachStatus(value)
+            elif key == 'contact_type' and value:
+                website.contact_type = ContactType(value)
+            else:
+                setattr(website, key, value)
+    
+    db.session.commit()
+    
+    return jsonify(website.to_dict())
+
+@app.route('/api/websites/<int:website_id>/outreach', methods=['PUT'])
+def update_outreach_status(website_id):
+    """Update outreach status for a website"""
+    data = request.json
+    
+    if not data or 'status' not in data:
+        return jsonify({'error': 'Status is required'}), 400
+    
+    status = data['status']
+    notes = data.get('notes')
+    
+    website = db_service.update_outreach_status(website_id, OutreachStatus(status), notes)
+    
+    if not website:
+        return jsonify({'error': f'Website with ID {website_id} not found'}), 404
+    
+    return jsonify(website.to_dict())
+
+@app.route('/api/stats/<string:niche>', methods=['GET'])
+def get_niche_stats(niche):
+    """Get statistics for a specific niche"""
+    stats = db_service.get_website_stats_by_niche(niche)
+    return jsonify(stats)
+
+@app.route('/api/export/<string:niche>', methods=['GET'])
+def export_niche_data(niche):
+    """Export website data for a niche as JSON"""
+    min_da = request.args.get('min_da')
+    max_da = request.args.get('max_da')
+    
+    # Convert string values to appropriate types
+    if min_da:
+        min_da = float(min_da)
+    if max_da:
+        max_da = float(max_da)
+    
+    websites = db_service.get_websites_by_niche(niche, min_da=min_da, max_da=max_da)
+    
+    return jsonify([website.to_dict() for website in websites])
+
+if __name__ == '__main__':
+    app.run(debug=True)

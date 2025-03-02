@@ -1,0 +1,80 @@
+import re
+from urllib.parse import urlparse, urljoin
+from typing import List, Set, Dict, Any, Optional
+import csv
+import io
+import json
+
+def normalize_url(url: str) -> str:
+    """Normalize URL by adding scheme if missing"""
+    if not url.startswith(('http://', 'https://')):
+        return f'https://{url}'
+    return url
+
+def extract_domain(url: str) -> str:
+    """Extract domain from URL"""
+    try:
+        parsed_url = urlparse(url)
+        return parsed_url.netloc
+    except:
+        return url
+
+def validate_email(email: str) -> bool:
+    """Validate email format"""
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(email_pattern, email))
+
+def generate_csv(data: List[Dict[str, Any]]) -> str:
+    """Generate CSV string from list of dictionaries"""
+    if not data:
+        return ""
+    
+    output = io.StringIO()
+    
+    # Extract field names from the first dictionary
+    fieldnames = data[0].keys()
+    
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(data)
+    
+    return output.getvalue()
+
+def parse_keywords_string(keywords_str: str) -> List[Dict[str, Any]]:
+    """Parse JSON string of keywords into list of dictionaries"""
+    try:
+        if not keywords_str:
+            return []
+        
+        if isinstance(keywords_str, list):
+            return keywords_str
+        
+        return json.loads(keywords_str)
+    except json.JSONDecodeError:
+        # If it's a comma-separated string, convert to list of dictionaries
+        if isinstance(keywords_str, str):
+            return [{'keyword': kw.strip()} for kw in keywords_str.split(',') if kw.strip()]
+        return []
+
+def group_websites_by_da_range(websites: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Group websites by domain authority range"""
+    ranges = {
+        '0-20': [],
+        '21-40': [],
+        '41-60': [],
+        '61-80': []
+    }
+    
+    for website in websites:
+        da = website.get('domain_authority', 0)
+        
+        if 0 <= da <= 20:
+            ranges['0-20'].append(website)
+        elif 21 <= da <= 40:
+            ranges['21-40'].append(website)
+        elif 41 <= da <= 60:
+            ranges['41-60'].append(website)
+        elif 61 <= da <= 80:
+            ranges['61-80'].append(website)
+    
+    return ranges

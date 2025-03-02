@@ -1,0 +1,203 @@
+import requests
+import re
+import logging
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+from typing import Dict, List, Set, Tuple, Optional, Any
+
+from config import Config
+from models.website import ContactType
+
+logger = logging.getLogger(__name__)
+
+class ScraperService:
+    """Service for scraping websites to extract contact information and guest post opportunities"""
+    
+    def __init__(self):
+        self.headers = {
+            'User-Agent': Config.USER_AGENT
+        }
+        self.timeout = Config.REQUEST_TIMEOUT
+    
+    def _make_request(self, url: str) -> Optional[BeautifulSoup]:
+        """Make a request to a URL and return the BeautifulSoup object"""
+        try:
+            response = requests.get(url, headers=self.headers, timeout=self.timeout)
+            response.raise_for_status()
+            return BeautifulSoup(response.text, 'html.parser')
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error making request to {url}: {e}")
+            return None
+    
+    def get_website_info(self, url: str) -> Dict[str, Any]:
+        """Get basic information about a website"""
+        # Normalize URL
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+        
+        domain = self._extract_domain(url)
+        
+        # Initialize result dictionary
+        result = {
+            'url': url,
+            'domain': domain,
+            'title': '',
+            'contact_email': None,
+            'contact_form_url': None,
+            'contact_type': ContactType.NONE,
+            'guest_post_guidelines_url': None,
+            'accepts_guest_posts': False
+        }
+        
+        # Get the homepage
+        soup = self._make_request(url)
+        if not soup:
+            return result
+        
+        # Extract title
+        title_tag = soup.find('title')
+        result['title'] = title_tag.text.strip() if title_tag else ''
+        
+        # Extract contact information from homepage
+        contact_info = self._extract_contact_info(soup, url)
+        result.update(contact_info)
+        
+        # Look for common contact and write for us pages
+        contact_page_url = self._find_contact_page(soup, url)
+        if contact_page_url:
+            contact_soup = self._make_request(contact_page_url)
+            if contact_soup:
+                contact_info = self._extract_contact_info(contact_soup, contact_page_url)
+                # Update result with contact info if found
+                if contact_info['contact_email'] and not result['contact_email']:
+                    result['contact_email'] = contact_info['contact_email']
+                if contact_info['contact_form_url'] and not result['contact_form_url']:
+                    result['contact_form_url'] = contact_info['contact_form_url']
+        
+        # Look for write for us / guest post pages
+        guest_post_url = self._find_guest_post_page(soup, url)
+        if guest_post_url:
+            result['guest_post_guidelines_url'] = guest_post_url
+            result['accepts_guest_posts'] = True
+            
+            # Check the guest post page for contact information
+            guest_soup = self._make_request(guest_post_url)
+            if guest_soup:
+                guest_contact_info = self._extract_contact_info(guest_soup, guest_post_url)
+                # Update result with contact info if found
+                if guest_contact_info['contact_email'] and not result['contact_email']:
+                    result['contact_email'] = guest_contact_info['contact_email']
+                if guest_contact_info['contact_form_url'] and not result['contact_form_url']:
+                    result['contact_form_url'] = guest_contact_info['contact_form_url']
+        
+        # Determine contact type
+        if result['contact_email']:
+            result['contact_type'] = ContactType.EMAIL
+        elif result['contact_form_url']:
+            result['contact_type'] = ContactType.FORM
+        
+        return result
+    
+    def _extract_domain(self, url: str) -> str:
+        """Extract domain from URL"""
+        try:
+            parsed_url = urlparse(url)
+            return parsed_url.netloc
+        except:
+            return url
+    
+    def _extract_contact_info(self, soup: BeautifulSoup, base_url: str) -> Dict[str, Any]:
+        """Extract contact information from a BeautifulSoup object"""
+        result = {
+            'contact_email': None,
+            'contact_form_url': None
+        }
+        
+        # Extract email addresses
+        emails = self._extract_emails(soup)
+        if emails:
+            # Prioritize emails with keywords like "editor", "contact", "info", etc.
+            priority_emails = [email for email in emails if any(kw in email.lower() for kw in ['editor', 'contact', 'info', 'write', 'submit', 'contribution'])]
+            result['contact_email'] = priority_emails[0] if priority_emails else emails[0]
+        
+        # Extract contact forms
+        form_urls = self._extract_form_urls(soup, base_url)
+        if form_urls:
+            result['contact_form_url'] = form_urls[0]
+        
+        return result
+    
+    def _extract_emails(self, soup: BeautifulSoup) -> List[str]:
+        """Extract email addresses from a BeautifulSoup object"""
+        # Convert to string and find emails
+        html_str = str(soup)
+        
+        # Regular expression for email
+        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        emails = re.findall(email_pattern, html_str)
+        
+        # Filter out common false positives
+        filtered_emails = []
+        for email in emails:
+            # Skip emails that are likely not contact emails
+            if any(skip in email.lower() for skip in ['example.com', 'user@', 'name@', 'email@']):
+                continue
+            filtered_emails.append(email)
+        
+        return filtered_emails
+    
+    def _extract_form_urls(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """Extract contact form URLs from a BeautifulSoup object"""
+        form_urls = []
+        
+        # Find all forms
+        forms = soup.find_all('form')
+        for form in forms:
+            # Check if it's a contact form
+            if form.get('action'):
+                form_url = urljoin(base_url, form.get('action'))
+                form_urls.append(form_url)
+        
+        return form_urls
+    
+    def _find_contact_page(self, soup: BeautifulSoup, base_url: str) -> Optional[str]:
+        """Find contact page URL from a BeautifulSoup object"""
+        contact_keywords = ['contact', 'contact us', 'contact-us', 'get in touch', 'reach us']
+        
+        # Find all links
+        links = soup.find_all('a')
+        for link in links:
+            href = link.get('href')
+            text = link.get_text().lower().strip()
+            
+            if not href:
+                continue
+                
+            # Check if the link text contains contact keywords
+            if any(keyword in text for keyword in contact_keywords):
+                return urljoin(base_url, href)
+        
+        return None
+    
+    def _find_guest_post_page(self, soup: BeautifulSoup, base_url: str) -> Optional[str]:
+        """Find guest post / write for us page URL from a BeautifulSoup object"""
+        guest_post_keywords = [
+            'write for us', 'write-for-us', 'write for me', 'guest post', 'guest-post',
+            'guest article', 'contribute', 'submission', 'become a contributor',
+            'submit a guest post', 'submit an article', 'guest blogging', 'guest blogger'
+        ]
+        
+        # Find all links
+        links = soup.find_all('a')
+        for link in links:
+            href = link.get('href')
+            text = link.get_text().lower().strip()
+            
+            if not href:
+                continue
+                
+            # Check if the link text contains guest post keywords
+            if any(keyword in text for keyword in guest_post_keywords):
+                return urljoin(base_url, href)
+        
+        return None

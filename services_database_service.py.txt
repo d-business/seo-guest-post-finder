@@ -1,0 +1,137 @@
+import logging
+from typing import List, Dict, Any, Optional
+import json
+
+from models.website import db, Website, OutreachStatus, ContactType
+
+logger = logging.getLogger(__name__)
+
+class DatabaseService:
+    """Service for database operations"""
+    
+    def save_website(self, website_data: Dict[str, Any]) -> Website:
+        """Save website data to the database"""
+        # Check if website already exists
+        existing_website = Website.query.filter_by(url=website_data['url']).first()
+        
+        if existing_website:
+            # Update existing website
+            for key, value in website_data.items():
+                if hasattr(existing_website, key) and key != 'id':
+                    # Special handling for enum types
+                    if key == 'outreach_status' and value:
+                        existing_website.outreach_status = OutreachStatus(value)
+                    elif key == 'contact_type' and value:
+                        existing_website.contact_type = ContactType(value)
+                    else:
+                        setattr(existing_website, key, value)
+            
+            db.session.commit()
+            logger.info(f"Updated website: {existing_website.domain}")
+            return existing_website
+        else:
+            # Create new website
+            # Special handling for enum types
+            if 'outreach_status' in website_data and website_data['outreach_status']:
+                website_data['outreach_status'] = OutreachStatus(website_data['outreach_status'])
+            if 'contact_type' in website_data and website_data['contact_type']:
+                website_data['contact_type'] = ContactType(website_data['contact_type'])
+                
+            # Handle JSON fields if needed
+            if 'relevant_keywords' in website_data and isinstance(website_data['relevant_keywords'], list):
+                website_data['relevant_keywords'] = json.dumps(website_data['relevant_keywords'])
+            
+            new_website = Website(**website_data)
+            db.session.add(new_website)
+            db.session.commit()
+            logger.info(f"Created new website: {new_website.domain}")
+            return new_website
+    
+    def get_websites_by_niche(self, niche: str, 
+                              min_da: Optional[float] = None, 
+                              max_da: Optional[float] = None,
+                              limit: int = 100) -> List[Website]:
+        """Get websites by niche with optional domain authority filter"""
+        query = Website.query.filter_by(niche=niche)
+        
+        if min_da is not None:
+            query = query.filter(Website.domain_authority >= min_da)
+        
+        if max_da is not None:
+            query = query.filter(Website.domain_authority <= max_da)
+        
+        return query.order_by(Website.domain_authority.desc()).limit(limit).all()
+    
+    def get_websites_by_outreach_status(self, status: OutreachStatus, 
+                                         niche: Optional[str] = None,
+                                         limit: int = 100) -> List[Website]:
+        """Get websites by outreach status with optional niche filter"""
+        query = Website.query.filter_by(outreach_status=status)
+        
+        if niche:
+            query = query.filter_by(niche=niche)
+        
+        return query.order_by(Website.domain_authority.desc()).limit(limit).all()
+    
+    def update_outreach_status(self, website_id: int, status: OutreachStatus, notes: Optional[str] = None) -> Website:
+        """Update outreach status for a website"""
+        website = Website.query.get(website_id)
+        
+        if not website:
+            logger.error(f"Website not found with ID: {website_id}")
+            return None
+        
+        website.outreach_status = status
+        
+        if notes:
+            website.outreach_notes = notes
+        
+        db.session.commit()
+        logger.info(f"Updated outreach status for {website.domain} to {status.value}")
+        return website
+    
+    def get_website_stats_by_niche(self, niche: str) -> Dict[str, Any]:
+        """Get statistics for websites in a niche"""
+        websites = Website.query.filter_by(niche=niche).all()
+        
+        # Count by DA range
+        da_ranges = {
+            '0-20': 0,
+            '21-40': 0,
+            '41-60': 0,
+            '61-80': 0
+        }
+        
+        # Count by outreach status
+        status_counts = {status.value: 0 for status in OutreachStatus}
+        
+        # Count by contact type
+        contact_type_counts = {type.value: 0 for type in ContactType}
+        
+        for website in websites:
+            # Count by DA range
+            if website.domain_authority is not None:
+                if 0 <= website.domain_authority <= 20:
+                    da_ranges['0-20'] += 1
+                elif 21 <= website.domain_authority <= 40:
+                    da_ranges['21-40'] += 1
+                elif 41 <= website.domain_authority <= 60:
+                    da_ranges['41-60'] += 1
+                elif 61 <= website.domain_authority <= 80:
+                    da_ranges['61-80'] += 1
+            
+            # Count by outreach status
+            if website.outreach_status:
+                status_counts[website.outreach_status.value] += 1
+            
+            # Count by contact type
+            if website.contact_type:
+                contact_type_counts[website.contact_type.value] += 1
+        
+        return {
+            'total_websites': len(websites),
+            'da_ranges': da_ranges,
+            'outreach_status': status_counts,
+            'contact_types': contact_type_counts,
+            'accepts_guest_posts': sum(1 for w in websites if w.accepts_guest_posts)
+        }

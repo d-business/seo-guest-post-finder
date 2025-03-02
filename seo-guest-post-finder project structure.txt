@@ -1,0 +1,31 @@
+seo-guest-post-finder/
+│
+├── backend/
+│   ├── app.py               # Main Flask application
+│   ├── config.py            # Configuration settings (API keys, etc.)
+│   ├── requirements.txt     # Python dependencies
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── semrush_service.py   # SEMrush API integration
+│   │   ├── scraper_service.py   # Web scraping functionality
+│   │   └── database_service.py  # Database operations
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── website.py       # Website data model
+│   └── utils/
+│       ├── __init__.py
+│       └── helpers.py       # Helper functions
+│
+├── frontend/
+│   ├── public/
+│   │   └── index.html
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Dashboard.js       # Main dashboard
+│   │   │   ├── WebsiteList.js     # Display website results
+│   │   │   └── NicheInput.js      # Input form for niche/keywords
+│   │   ├── App.js
+│   │   └── index.js
+│   └── package.json
+│
+└── README.md
